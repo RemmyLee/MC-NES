@@ -15,7 +15,9 @@ START="$(date +%s)"
 # core, can land either side of zero slack; a different seed is the remedy).
 # The qsf edit is undone by the git checkout below.
 if [ -n "${SEED:-}" ]; then
-    echo "set_global_assignment -name SEED $SEED" >> NES.qsf
+    git checkout NES.qsf
+    # the qsf is CRLF with no final newline
+    printf '\r\nset_global_assignment -name SEED %s\r\n' "$SEED" >> NES.qsf
 fi
 
 quartus_sh --flow compile NES > build.log 2>&1 || {
