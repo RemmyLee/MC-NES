@@ -35,7 +35,7 @@ module mc_replay
 (
 	input             clk,
 	input             reset,       // the core's reset (high during a ROM load)
-	input             downloading, // a ROM upload is in progress (NES.sv `downloading`)
+	input             downloading, // a game upload is in progress (NES.sv `downloading` for a nes/fds/nsf type; boot0.rom is not a game)
 	input             vblank,
 
 	// DDR read channel (64 bit word address inside the 0x30000000 window)

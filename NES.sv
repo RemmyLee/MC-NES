@@ -1350,7 +1350,7 @@ mc_replay mc_replay
 (
 	.clk(clk),
 	.reset(reset_nes),
-	.downloading(downloading),
+	.downloading(downloading & (type_fds|type_nsf|type_nes)),   // a game, not boot0.rom (the FDS BIOS the firmware sends at core start)
 	.vblank(nes_vblank),
 	.ddr_addr(mc_rd_addr),
 	.ddr_req(mc_rd_req),
