@@ -34,6 +34,7 @@ No extra libraries were needed for the command line flow (`quartus_sh`,
 
     scripts/build.sh            # full compile, output in out/MC-NES_<date>.rbf
     scripts/build.sh 20260903   # fixed datecode
+    SEED=2 scripts/build.sh 20260903   # another fitter seed when a marginal clock misses timing
 
 The script runs `quartus_sh --flow compile NES`, then copies
 `output_files/NES.rbf` to `out/MC-NES_<date>.rbf` and writes `out/MC-NES_<date>.txt`

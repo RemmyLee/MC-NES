@@ -11,6 +11,13 @@ export PATH="$QUARTUS:$PATH"
 UPSTREAM="$(git rev-parse --short HEAD)"
 START="$(date +%s)"
 
+# SEED=n picks a fitter seed (a marginal clock domain, the HDMI PLL in this
+# core, can land either side of zero slack; a different seed is the remedy).
+# The qsf edit is undone by the git checkout below.
+if [ -n "${SEED:-}" ]; then
+    echo "set_global_assignment -name SEED $SEED" >> NES.qsf
+fi
+
 quartus_sh --flow compile NES > build.log 2>&1 || {
     echo "build failed, see build.log" >&2
     grep -n "^Error" build.log | head -20 >&2
@@ -23,6 +30,7 @@ cp output_files/NES.rbf "out/MC-NES_$DATE.rbf"
 {
     echo "MC-NES_$DATE.rbf"
     echo "commit: $UPSTREAM"
+    echo "seed: ${SEED:-default}"
     echo "wall: $((END - START)) s"
     echo "critical warnings: $(grep -c "Critical Warning" build.log || true)"
     echo
