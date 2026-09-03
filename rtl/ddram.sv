@@ -39,7 +39,14 @@ module ddram
 	input         ch1_req,
 	input         ch1_rnw,
 	input  [7:0]  ch1_be,
-	output        ch1_ready
+	output        ch1_ready,
+
+	// MiSTer Control telemetry: single 64 bit word writes, address is the
+	// 64 bit word index inside the 0x30000000 window
+	input  [24:0] ch2_addr,
+	input  [63:0] ch2_din,
+	input         ch2_req,
+	output        ch2_ready
 );
 
 reg  [7:0] ram_burst;
@@ -51,6 +58,7 @@ reg        ram_write = 0;
 reg  [7:0] ram_be;
 
 reg  [5:1] ready;
+reg        ch2_rq = 0;
 
 assign DDRAM_BURSTCNT = ram_burst;
 assign DDRAM_BE       = ram_read ? 8'hFF : ram_be;
@@ -61,6 +69,7 @@ assign DDRAM_WE       = ram_write;
 
 assign ch1_dout  = ram_q[1];
 assign ch1_ready = ready[1];
+assign ch2_ready = ready[2];
 
 reg        state  = 0;
 reg  [0:0] ch = 0; 
@@ -70,6 +79,7 @@ always @(posedge DDRAM_CLK) begin
 
 
 	ch_rq <= ch_rq | {ch1_req};
+	ch2_rq <= ch2_rq | ch2_req;
 	ready <= 0;
 
 	if(!DDRAM_BUSY) begin
@@ -93,6 +103,15 @@ always @(posedge DDRAM_CLK) begin
 						state         <= 1;
 					end
             end
+				else if(ch2_rq || ch2_req) begin
+					ch2_rq           <= 0;
+					ram_data         <= ch2_din;
+					ram_be           <= 8'hFF;
+					ram_address      <= {ch2_addr, 2'b00};
+					ram_burst        <= 1;
+					ram_write        <= 1;
+					ready[2]         <= 1;
+				end
 
 			1: if(DDRAM_DOUT_READY) begin
 					ram_q[ch]        <= DDRAM_DOUT;

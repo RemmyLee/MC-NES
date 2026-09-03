@@ -170,7 +170,14 @@ module NES(
 	output        SAVE_out_rnw,   // read = 1, write = 0
 	output        SAVE_out_ena,   // one cycle high for each action
 	output  [7:0] SAVE_out_be,
-	input         SAVE_out_done   // should be one cycle high when write is done or read value is valid
+	input         SAVE_out_done,  // should be one cycle high when write is done or read value is valid
+
+	// MiSTer Control telemetry (rtl/mc): live read of the save state register
+	// bus while no save or load runs, and the CPU registers
+	input   [9:0] mc_bus_adr,
+	output [63:0] mc_bus_dout,
+	output        mc_bus_free,
+	output [63:0] cpu_regs
 );
 
 
@@ -440,6 +447,7 @@ T65 cpu(
 	.DO     (cpu_dout),
 
 	.Instrnew (cpu_Instrnew),
+	.Regs     (cpu_regs),
 
 	// savestates
 	.SaveStateBus_Din  (SaveStateBus_Din ),
@@ -853,7 +861,8 @@ assign SS_TOP_BACK[63:22] = 42'b0; // free to be used
 /**********************************************************/
 
 wire [63:0] SaveStateBus_Din;
-wire [9:0] SaveStateBus_Adr;
+wire [9:0] SaveStateBus_Adr_ss;   // driven by the savestates machine
+wire [9:0] SaveStateBus_Adr;      // muxed below, after savestate_busy is declared
 wire SaveStateBus_wren, SaveStateBus_rst;
 
 wire [7:0]  Savestate_RAMWriteData;
@@ -873,11 +882,17 @@ wire savestate_loadstate;
 wire [31:0] savestate_address;
 wire savestate_busy;
 
+// MiSTer Control reads the register bus live whenever no save or load runs
+assign SaveStateBus_Adr = savestate_busy ? SaveStateBus_Adr_ss : mc_bus_adr;
+
 wire [63:0] SS_TOP;
 wire [63:0] SS_TOP_BACK;
 eReg_SavestateV #(SSREG_INDEX_TOP, SSREG_DEFAULT_TOP) iREG_SAVESTATE_TOP (clk, SaveStateBus_Din, SaveStateBus_Adr, SaveStateBus_wren, SaveStateBus_rst, SaveStateBus_wired_or[4], SS_TOP_BACK, SS_TOP);
 
 wire [63:0] SaveStateBus_Dout  = SaveStateBus_wired_or[0] | SaveStateBus_wired_or[1] | SaveStateBus_wired_or[2] | SaveStateBus_wired_or[3] | SaveStateBus_wired_or[4] | SaveStateExt_Dout;
+
+assign mc_bus_dout = SaveStateBus_Dout;
+assign mc_bus_free = ~savestate_busy;
 
 wire loading_savestate;
 wire saving_savestate;
@@ -930,7 +945,7 @@ savestates savestates (
 	.paused                 (corepause_active_delay),
 
 	.BUS_Din                (SaveStateBus_Din),
-	.BUS_Adr                (SaveStateBus_Adr),
+	.BUS_Adr                (SaveStateBus_Adr_ss),
 	.BUS_wren               (SaveStateBus_wren),
 	.BUS_rst                (SaveStateBus_rst),
 	.BUS_Dout               (SaveStateBus_Dout),

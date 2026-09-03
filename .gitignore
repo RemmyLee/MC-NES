@@ -45,3 +45,4 @@ build.start
 build.end
 out/
 *.qws
+sim/*.vvp

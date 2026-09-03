@@ -132,6 +132,9 @@ parameter CONF_STR = {
 	"H8P5O[78],Switch 5,Off,On;",
 	"H8P5O[79],Switch 6,Off,On;",
 	"H8P5O[80],Switch 7,Off,On;",
+	"P6,MiSTer Control;",
+	"P6-;",
+	"P6O[81],Telemetry,On,Off;",
 	"-;",
 	"R0,Reset;",
 	"J1,A,B,Select,Start,FDS,Mic,Zapper/Vaus Btn,PP/Mat 1,PP/Mat 2,PP/Mat 3,PP/Mat 4,PP/Mat 5,PP/Mat 6,PP/Mat 7,PP/Mat 8,PP/Mat 9,PP/Mat 10,PP/Mat 11,PP/Mat 12,Savestates;",
@@ -861,7 +864,13 @@ NES nes (
 	.SAVE_out_rnw            (ss_rnw),           // read = 1, write = 0
 	.SAVE_out_ena            (ss_req),           // one cycle high for each action
 	.SAVE_out_be             (ss_be),
-	.SAVE_out_done           (ss_ack)            // should be one cycle high when write is done or read value is valid
+	.SAVE_out_done           (ss_ack),           // should be one cycle high when write is done or read value is valid
+
+	// MiSTer Control telemetry
+	.mc_bus_adr              (mc_bus_adr),
+	.mc_bus_dout             (mc_bus_dout),
+	.mc_bus_free             (mc_bus_free),
+	.cpu_regs                (mc_cpu_regs)
 );
 
 wire [24:0] cpu_addr;
@@ -1269,7 +1278,101 @@ ddram ddram
 	.ch1_req(ss_req),
 	.ch1_rnw(ss_rnw),
 	.ch1_be(ss_be),
-	.ch1_ready(ss_ack)
+	.ch1_ready(ss_ack),
+
+	.ch2_addr(mc_ddr_addr),
+	.ch2_din(mc_ddr_din),
+	.ch2_req(mc_ddr_req),
+	.ch2_ready(mc_ddr_ready)
+);
+
+/**********************************************************/
+/*************     MiSTer Control telemetry   *************/
+/**********************************************************/
+// rtl/mc: a per-frame snapshot (CPU registers, the save state register bus,
+// the 2 KB work RAM, the pads the game latched) written to DDR3 at
+// 0x3C000000 for the MiSTer Control app. Layout in rtl/mc/mc_telemetry.sv.
+
+wire  [9:0] mc_bus_adr;
+wire [63:0] mc_bus_dout, mc_cpu_regs;
+wire        mc_bus_free;
+wire [24:0] mc_ddr_addr;
+wire [63:0] mc_ddr_din;
+wire        mc_ddr_req, mc_ddr_ready;
+wire [31:0] mc_frame;
+
+// the pads as the game latches them: the value that enters the shift register
+// on the $4016 strobe (same mux as joypad_bits above), and one pulse per strobe
+reg        mc_strobe_d;
+reg  [7:0] mc_j1, mc_j2;
+always @(posedge clk) begin
+	mc_strobe_d <= joypad_out[0];
+	if (joypad_out[0]) begin
+		mc_j1 <= joy_swap ? nes_joy_B : nes_joy_A;
+		mc_j2 <= joy_swap ? nes_joy_A : nes_joy_B;
+	end
+end
+wire mc_strobe = joypad_out[0] & ~mc_strobe_d;
+
+// every write that lands in the work RAM (SDRAM linear 0x380000..0x3807FF):
+// the CPU, the loader's RAM Clear, a save state load
+wire mc_wr_cpu = cpu_write && (cpu_addr[24:11] == 14'h0700);
+wire mc_wr_ld  = loader_write_mem && (loader_addr_mem[24:11] == 14'h0700);
+wire mc_wr_ss  = sleep_savestate && Savestate_SDRAMWrEn && (Savestate_SDRAMAddr[24:11] == 14'h0700);
+wire        mc_wr      = mc_wr_ss | mc_wr_ld | mc_wr_cpu;
+wire [10:0] mc_wr_addr = mc_wr_ss ? Savestate_SDRAMAddr[10:0] : mc_wr_ld ? loader_addr_mem[10:0] : cpu_addr[10:0];
+wire  [7:0] mc_wr_data = mc_wr_ss ? Savestate_SDRAMWriteData : mc_wr_ld ? loader_write_data_mem : cpu_dout;
+
+wire        mc_ram_hold;
+wire [10:0] mc_ram_rd_addr;
+wire  [7:0] mc_ram_rd_data, mc_bm_data;
+wire  [7:0] mc_bm_addr;
+wire        mc_ram_torn;
+
+mc_shadow_ram mc_shadow_ram
+(
+	.clk(clk),
+	.clear(downloading & (type_fds | type_nes)),
+	.wr(mc_wr),
+	.wr_addr(mc_wr_addr),
+	.wr_data(mc_wr_data),
+	.hold(mc_ram_hold),
+	.rd_addr(mc_ram_rd_addr),
+	.rd_data(mc_ram_rd_data),
+	.bm_addr(mc_bm_addr),
+	.bm_data(mc_bm_data),
+	.torn(mc_ram_torn)
+);
+
+mc_telemetry mc_telemetry
+(
+	.clk(clk),
+	.reset(reset_nes),
+	.enable(~status[81]),
+	.vblank(nes_vblank),
+	.scanline(scanline),
+	.cycle(cycle),
+	.clk_hz(32'd21477272),
+	.sys_type({1'b0, effective_sys_type}),
+	.cpu_regs(mc_cpu_regs),
+	.bus_adr(mc_bus_adr),
+	.bus_dout(mc_bus_dout),
+	.bus_free(mc_bus_free),
+	.ram_hold(mc_ram_hold),
+	.ram_rd_addr(mc_ram_rd_addr),
+	.ram_rd_data(mc_ram_rd_data),
+	.bm_addr(mc_bm_addr),
+	.bm_data(mc_bm_data),
+	.ram_torn(mc_ram_torn),
+	.joy1_latched(mc_j1),
+	.joy2_latched(mc_j2),
+	.joy_strobe(mc_strobe),
+	.replay_active(1'b0),
+	.ddr_addr(mc_ddr_addr),
+	.ddr_din(mc_ddr_din),
+	.ddr_req(mc_ddr_req),
+	.ddr_ready(mc_ddr_ready),
+	.frame(mc_frame)
 );
 
 // saving with keyboard/OSD/gamepad
