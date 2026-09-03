@@ -62,7 +62,7 @@ mc_telemetry dut (.clk(clk), .reset(reset), .enable(enable), .vblank(vblank), .s
 	.clk_hz(32'd21477272), .sys_type(3'd0), .cpu_regs(cpu_regs),
 	.bus_adr(bus_adr), .bus_dout(bus_dout), .bus_free(bus_free),
 	.ram_hold(hold), .ram_rd_addr(rd_addr), .ram_rd_data(rd_data), .bm_addr(bm_addr), .bm_data(bm_data), .ram_torn(torn),
-	.joy1_latched(j1), .joy2_latched(j2), .joy_strobe(strobe), .replay_active(1'b0),
+	.joy1_latched(j1), .joy2_latched(j2), .joy_strobe(strobe), .joy_read(strobe), .replay_active(1'b0), .replay_index(32'd77), .replay_state(8'd2), .replay_gen(8'd9),
 	.ddr_addr(ddr_addr), .ddr_din(ddr_din), .ddr_req(ddr_req), .ddr_ready(ddr_ready), .frame(frame));
 
 localparam integer HDR  = 0;
@@ -112,9 +112,10 @@ initial begin
 	check("frame", frame, 1);
 	slot = SLOT0 + 1*512;
 	check("hdr magic", ddr[HDR+0], 64'h01005345_4E2D434D);
-	check("hdr h1", ddr[HDR+1], {32'd4096, 32'd1});
+	check("hdr h1", ddr[HDR+1], {32'd4096, 32'd2});
 	check("hdr h2", ddr[HDR+2], {32'd4, 32'd1});
-	check("hdr h3", ddr[HDR+3], 64'd1);
+	check("hdr h3", ddr[HDR+3], {24'd0, 8'd2, 32'd1});
+	check("slot w3 replay/reads", ddr[slot+3], {16'd2, 8'd9, 8'd2, 32'd77});
 	check("slot w0", ddr[slot+0], {7'd0, cycle, 7'd0, scanline, 32'd1});
 	check("slot w1", ddr[slot+1], cpu_regs);
 	check("slot w2 pads/strobes/flags", ddr[slot+2], {32'd0, 5'd0, 1'b0, 1'b0, 1'b1, 8'd2, j2, j1});

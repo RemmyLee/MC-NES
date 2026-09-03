@@ -24,4 +24,5 @@ set_global_assignment -name VERILOG_FILE rtl/compat.v
 set_global_assignment -name SDC_FILE NES.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mc/mc_shadow_ram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mc/mc_telemetry.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/mc/mc_replay.sv
 set_global_assignment -name SYSTEMVERILOG_FILE NES.sv

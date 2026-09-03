@@ -46,7 +46,13 @@ module ddram
 	input  [24:0] ch2_addr,
 	input  [63:0] ch2_din,
 	input         ch2_req,
-	output        ch2_ready
+	output        ch2_ready,
+
+	// MiSTer Control replay: single 64 bit word reads
+	input  [24:0] ch3_addr,
+	input         ch3_req,
+	output [63:0] ch3_dout,
+	output        ch3_ready
 );
 
 reg  [7:0] ram_burst;
@@ -59,6 +65,8 @@ reg  [7:0] ram_be;
 
 reg  [5:1] ready;
 reg        ch2_rq = 0;
+reg        ch3_rq = 0;
+reg [63:0] ram_q3;
 
 assign DDRAM_BURSTCNT = ram_burst;
 assign DDRAM_BE       = ram_read ? 8'hFF : ram_be;
@@ -70,8 +78,10 @@ assign DDRAM_WE       = ram_write;
 assign ch1_dout  = ram_q[1];
 assign ch1_ready = ready[1];
 assign ch2_ready = ready[2];
+assign ch3_dout  = ram_q3;
+assign ch3_ready = ready[3];
 
-reg        state  = 0;
+reg  [1:0] state  = 0;
 reg  [0:0] ch = 0; 
 reg  [1:1] ch_rq;
 
@@ -80,6 +90,7 @@ always @(posedge DDRAM_CLK) begin
 
 	ch_rq <= ch_rq | {ch1_req};
 	ch2_rq <= ch2_rq | ch2_req;
+	ch3_rq <= ch3_rq | ch3_req;
 	ready <= 0;
 
 	if(!DDRAM_BUSY) begin
@@ -112,10 +123,23 @@ always @(posedge DDRAM_CLK) begin
 					ram_write        <= 1;
 					ready[2]         <= 1;
 				end
+				else if(ch3_rq || ch3_req) begin
+					ch3_rq           <= 0;
+					ram_address      <= {ch3_addr, 2'b00};
+					ram_burst        <= 1;
+					ram_read         <= 1;
+					state            <= 2;
+				end
 
 			1: if(DDRAM_DOUT_READY) begin
 					ram_q[ch]        <= DDRAM_DOUT;
 					ready[ch]        <= 1;
+					state            <= 0;
+				end
+
+			2: if(DDRAM_DOUT_READY) begin
+					ram_q3           <= DDRAM_DOUT;
+					ready[3]         <= 1;
 					state            <= 0;
 				end
 

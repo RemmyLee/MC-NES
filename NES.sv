@@ -135,6 +135,7 @@ parameter CONF_STR = {
 	"P6,MiSTer Control;",
 	"P6-;",
 	"P6O[81],Telemetry,On,Off;",
+	"P6O[82],Power-on RAM,Core setting,FCEUX pattern;",
 	"-;",
 	"R0,Reset;",
 	"J1,A,B,Select,Start,FDS,Mic,Zapper/Vaus Btn,PP/Mat 1,PP/Mat 2,PP/Mat 3,PP/Mat 4,PP/Mat 5,PP/Mat 6,PP/Mat 7,PP/Mat 8,PP/Mat 9,PP/Mat 10,PP/Mat 11,PP/Mat 12,Savestates;",
@@ -450,6 +451,13 @@ assign famtr[3] = (~joypad_out[2] & powerpad[0]) | (~joypad_out[1] & powerpad[4]
 
 wire [7:0] nes_joy_A = { joyA[0], joyA[1], joyA[2], joyA[3], joyA[7], joyA[6], joyA[5], ~paddle_atr & joyA[4] };
 wire [7:0] nes_joy_B = { joyB[0], joyB[1], joyB[2], joyB[3], joyB[7], joyB[6], joyB[5], ~paddle_atr & joyB[4] };
+
+// MiSTer Control (rtl/mc): declared here, driven in the telemetry section below
+wire        mc_rp_active;
+wire  [7:0] mc_rp_p1, mc_rp_p2, mc_rp_state, mc_rp_gen;
+wire [31:0] mc_rp_index;
+wire  [7:0] mc_joy_port1, mc_joy_port2;
+wire        mc_reset;
 wire [7:0] nes_joy_C = { joyC[0], joyC[1], joyC[2], joyC[3], joyC[7], joyC[6], joyC[5], ~paddle_atr & joyC[4] };
 wire [7:0] nes_joy_D = { joyD[0], joyD[1], joyD[2], joyD[3], joyD[7], joyD[6], joyD[5], ~paddle_atr & joyD[4] };
 
@@ -634,8 +642,8 @@ always @(posedge clk) begin
 	end else begin
 		if (joypad_out[0]) begin
 			joypad_bits  <= piano ? {15'h0000, uart_data[8:0]}
-				: {status[10] ? {8'h08, nes_joy_C} : 16'hFFFF, joy_swap ? nes_joy_B : nes_joy_A};
-			joypad_bits2 <= {status[10] ? {8'h04, nes_joy_D} : 16'hFFFF, joy_swap ? nes_joy_A : nes_joy_B};
+				: {status[10] ? {8'h08, nes_joy_C} : 16'hFFFF, mc_joy_port1};
+			joypad_bits2 <= {status[10] ? {8'h04, nes_joy_D} : 16'hFFFF, mc_joy_port2};
 			joypad_d4 <= paddle_en ? paddle_nes : {4'b1111, powerpad[7], powerpad[11], powerpad[2], powerpad[3]};
 			joypad_d3 <= {powerpad[6], powerpad[10], powerpad[9], powerpad[5], powerpad[8], powerpad[4], powerpad[0], powerpad[1]};
 		end
@@ -668,12 +676,16 @@ wire [3:0] prg_nvram = mapper_flags[34:31];
 wire loader_busy, loader_done, loader_fail;
 wire [9:0] prg_mask, chr_mask;
 wire [1:0] clearval = status[66:65];
-wire [7:0] cleardata = (clearval == 3) ? random_byte : (clearval == 2 ? 8'hFF : 8'h00);
+// MiSTer Control: FCEUX's power-on pattern 00 00 00 00 FF FF FF FF (fceu.cpp:988)
+// so a TAS recorded in FCEUX starts from the same RAM (docs/TAS-semantics.md)
+wire       mc_fceux_ram = status[82];
+wire [7:0] cleardata = mc_fceux_ram ? (loader_addr[2] ? 8'hFF : 8'h00) :
+                       (clearval == 3) ? random_byte : (clearval == 2 ? 8'hFF : 8'h00);
 
 GameLoader loader
 (
 	.clk              ( clk               ),
-	.clearval         ( |clearval         ),
+	.clearval         ( |clearval | mc_fceux_ram ),
 	.cleardata        ( cleardata         ),
 	.reset            ( loader_reset      ),
 	.downloading      ( downloading       ),
@@ -714,6 +726,7 @@ end
 
 wire reset_nes =
 	~init_reset_n  ||
+	mc_reset       ||
 	buttons[1]     ||
 	arm_reset      ||
 	download_reset ||
@@ -1283,7 +1296,12 @@ ddram ddram
 	.ch2_addr(mc_ddr_addr),
 	.ch2_din(mc_ddr_din),
 	.ch2_req(mc_ddr_req),
-	.ch2_ready(mc_ddr_ready)
+	.ch2_ready(mc_ddr_ready),
+
+	.ch3_addr(mc_rd_addr),
+	.ch3_req(mc_rd_req),
+	.ch3_dout(mc_rd_dout),
+	.ch3_ready(mc_rd_ready)
 );
 
 /**********************************************************/
@@ -1308,11 +1326,42 @@ reg  [7:0] mc_j1, mc_j2;
 always @(posedge clk) begin
 	mc_strobe_d <= joypad_out[0];
 	if (joypad_out[0]) begin
-		mc_j1 <= joy_swap ? nes_joy_B : nes_joy_A;
-		mc_j2 <= joy_swap ? nes_joy_A : nes_joy_B;
+		mc_j1 <= mc_joy_port1;
+		mc_j2 <= mc_joy_port2;
 	end
 end
 wire mc_strobe = joypad_out[0] & ~mc_strobe_d;
+
+// joypad reads ($4016/$4017 with the CPU reading): FCEUX's lag rule counts these
+reg mc_joyclk_d;
+always @(posedge clk) mc_joyclk_d <= |joypad_clock;
+wire mc_joy_read = |joypad_clock & ~mc_joyclk_d;
+
+// replay: the buffer's pads replace the HPS pads on both ports while it runs
+assign mc_joy_port1 = mc_rp_active ? mc_rp_p1 : (joy_swap ? nes_joy_B : nes_joy_A);
+assign mc_joy_port2 = mc_rp_active ? mc_rp_p2 : (joy_swap ? nes_joy_A : nes_joy_B);
+assign mc_reset = 1'b0;   // reserved for movie reset commands
+
+wire [24:0] mc_rd_addr;
+wire        mc_rd_req, mc_rd_ready;
+wire [63:0] mc_rd_dout;
+
+mc_replay mc_replay
+(
+	.clk(clk),
+	.reset(reset_nes),
+	.vblank(nes_vblank),
+	.ddr_addr(mc_rd_addr),
+	.ddr_req(mc_rd_req),
+	.ddr_dout(mc_rd_dout),
+	.ddr_ready(mc_rd_ready),
+	.active(mc_rp_active),
+	.p1(mc_rp_p1),
+	.p2(mc_rp_p2),
+	.index(mc_rp_index),
+	.state(mc_rp_state),
+	.gen(mc_rp_gen)
+);
 
 // every write that lands in the work RAM (SDRAM linear 0x380000..0x3807FF):
 // the CPU, the loader's RAM Clear, a save state load
@@ -1367,7 +1416,11 @@ mc_telemetry mc_telemetry
 	.joy1_latched(mc_j1),
 	.joy2_latched(mc_j2),
 	.joy_strobe(mc_strobe),
-	.replay_active(1'b0),
+	.joy_read(mc_joy_read),
+	.replay_active(mc_rp_active),
+	.replay_index(mc_rp_index),
+	.replay_state(mc_rp_state),
+	.replay_gen(mc_rp_gen),
 	.ddr_addr(mc_ddr_addr),
 	.ddr_din(mc_ddr_din),
 	.ddr_req(mc_ddr_req),

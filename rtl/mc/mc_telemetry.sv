@@ -7,9 +7,9 @@
 //
 // Header (little endian 64 bit words):
 //   h0  magic  "MC-NES\0\1"
-//   h1  [31:0] layout version = 1     [63:32] slot size = 4096
+//   h1  [31:0] layout version = 2     [63:32] slot size = 4096
 //   h2  [31:0] frame (written last)   [63:32] slot count = 4
-//   h3  [31:0] flags: bit0 enabled    [63:32] replay state (0 in this version)
+//   h3  [31:0] flags: bit0 enabled    [63:32] replay state (rtl/mc/mc_replay.sv)
 //   h4  [31:0] core clock Hz          [63:32] system type (status[72:70])
 // The header is written every frame, also while telemetry is off, so a reader
 // can tell "off" (frame advances, bit0 clear) from "no MC core" (no magic).
@@ -19,9 +19,11 @@
 //   0x008  CPU registers as T65 packs them: [63:48] PC [47:32] S [31:24] P
 //          [23:16] Y [15:8] X [7:0] A
 //   0x010  [7:0] pad 1 latched at the last $4016 strobe  [15:8] pad 2
-//          [23:16] strobes this frame (0 = lag frame, saturates at 255)
+//          [23:16] strobes this frame (saturates at 255)
 //          [24] register words valid  [25] RAM torn  [26] replay active
-//   0x018  reserved (0)
+//   0x018  [31:0] replay entry index  [39:32] replay state  [47:40] replay
+//          generation  [63:48] joypad reads this frame ($4016/$4017 reads,
+//          saturates; 0 = a lag frame by FCEUX's rule, docs/TAS-semantics.md)
 //   0x040  64 x 64 bit: the save state register bus, words 0..63
 //          (index map: rtl/regs_savestates.sv; same encoding as the .ss file)
 //   0x240  2048 bytes CPU work RAM
@@ -71,8 +73,12 @@ module mc_telemetry
 	input       [7:0] joy1_latched,
 	input       [7:0] joy2_latched,
 	input             joy_strobe,      // one clock per $4016 strobe rising edge
+	input             joy_read,        // one clock per $4016/$4017 read
 
 	input             replay_active,
+	input      [31:0] replay_index,
+	input       [7:0] replay_state,
+	input       [7:0] replay_gen,
 
 	// DDR write channel (64 bit word address inside the 0x30000000 window)
 	output reg [24:0] ddr_addr,
@@ -97,11 +103,18 @@ localparam [24:0] W_TAIL = 25'd360;   // 0xB40
 reg vblank_d = 0;
 wire frame_start = vblank & ~vblank_d;
 
-reg [7:0] strobes = 0;
+reg  [7:0] strobes = 0;
+reg [15:0] reads = 0;
 always @(posedge clk) begin
 	vblank_d <= vblank;
-	if (frame_start) strobes <= 0;
-	else if (joy_strobe && strobes != 8'hFF) strobes <= strobes + 8'd1;
+	if (frame_start) begin
+		strobes <= 0;
+		reads   <= 0;
+	end
+	else begin
+		if (joy_strobe && strobes != 8'hFF) strobes <= strobes + 8'd1;
+		if (joy_read && reads != 16'hFFFF) reads <= reads + 16'd1;
+	end
 end
 
 wire [1:0] next_slot = frame[1:0] + 2'd1;   // 2 bit wire: wraps
@@ -117,6 +130,7 @@ st_t st = IDLE, after_write = IDLE;
 reg [63:0] snap_regs;
 reg  [8:0] snap_scanline, snap_cycle;
 reg  [7:0] snap_strobes, snap_j1, snap_j2;
+reg [15:0] snap_reads;
 reg        snap_bus_ok, snap_torn;
 reg [24:0] slot_base;
 reg  [7:0] idx;          // word index within the current section
@@ -162,6 +176,7 @@ always @(posedge clk) begin
 			snap_scanline <= scanline;
 			snap_cycle    <= cycle;
 			snap_strobes  <= strobes;
+			snap_reads    <= reads;
 			snap_j1       <= joy1_latched;
 			snap_j2       <= joy2_latched;
 			snap_bus_ok   <= bus_free;
@@ -178,7 +193,7 @@ always @(posedge clk) begin
 		2'd1: write_word(slot_base + 25'd1, snap_regs, HEAD);
 		default: begin
 			idx <= 0;
-			write_word(slot_base + 25'd3, 64'd0, st_t'(snap_bus_ok ? REGS_SET : RAM_RUN));
+			write_word(slot_base + 25'd3, {snap_reads, replay_gen, replay_state, replay_index}, st_t'(snap_bus_ok ? REGS_SET : RAM_RUN));
 		end
 		endcase
 	end
@@ -241,8 +256,8 @@ always @(posedge clk) begin
 		hdr_idx <= hdr_idx + 3'd1;
 		case (hdr_idx)
 		3'd0: write_word(HEADER_WORD + 25'd0, MAGIC, HDR);
-		3'd1: write_word(HEADER_WORD + 25'd1, {32'd4096, 32'd1}, HDR);
-		3'd2: write_word(HEADER_WORD + 25'd3, {32'd0, 31'd0, enable}, HDR);
+		3'd1: write_word(HEADER_WORD + 25'd1, {32'd4096, 32'd2}, HDR);
+		3'd2: write_word(HEADER_WORD + 25'd3, {24'd0, replay_state, 31'd0, enable}, HDR);
 		3'd3: write_word(HEADER_WORD + 25'd4, {29'd0, sys_type, clk_hz}, HDR);
 		default: write_word(HEADER_WORD + 25'd2, {32'd4, frame}, IDLE);
 		endcase
