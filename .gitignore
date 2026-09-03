@@ -37,3 +37,11 @@ c5_pin_model_dump.txt
 *~
 *.xml
 *.cdf
+db/
+incremental_db/
+output_files/
+build.log
+build.start
+build.end
+out/
+*.qws
