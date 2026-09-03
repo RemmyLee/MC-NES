@@ -547,6 +547,14 @@ always_comb begin
 		if (status[34:32] == 7) joypad2_data[4:1] = ~famtr;
 		if (fkeyb)              joypad2_data[4:1] = key_out;
 	end
+	// MiSTer Control replay: the movie owns both data bits while it runs, whatever
+	// SNAC, swap or gun option NES.CFG holds (with SNAC on, port 1 otherwise reads
+	// the connector, and the movie's player 1 never reaches the game).
+	if (mc_rp_active) begin
+		joypad1_data[0] = joypad_bits[0];
+		joypad2_data[0] = joypad_bits2[0];
+	end
+
 end
 
 wire mic = (mic_cnt < 8'd215) && mic_button;
