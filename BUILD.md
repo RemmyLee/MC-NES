@@ -58,8 +58,30 @@ Unmodified upstream `9a63821` (Release 20260823), first build, 2026-09-03:
 | Critical warnings | 0 |
 | `NES.rbf` | 3,304,192 bytes |
 
-Every later build is compared against this row. A negative slack on any clock
-is a failed build.
+First telemetry build, `MC-NES_20260903b.rbf` (commit `ee6a0d4`, rtl/mc added):
+
+| Item | Value |
+|---|---|
+| Wall time | 1676 s (27 min 56 s) |
+| Logic (ALMs) | 31,034 / 41,910 (74%), +690 |
+| Registers | 35,634, +375 |
+| RAM blocks | 109 / 553, +5 (shadow RAM, write FIFO, bitmap) |
+| Setup slack, core clock | 2.264 ns (TNS 0) |
+| Setup slack, tightest | 0.323 ns, HDMI PLL (TNS 0) |
+| Critical warnings | 0 |
+
+Every later build is compared against these rows. A negative slack on any
+clock is a failed build. The tightest slack sits on the HDMI PLL and moves
+between builds whose difference is unrelated logic (0.468 to 0.323 ns here);
+judge by "all slack positive", not by matching the previous number.
+
+## Simulation
+
+    sim/run.sh    # Icarus Verilog (brew install icarus-verilog); checks the DDR layout
+
+The testbench writes frames the way the core does and checks every field the
+app reads (see `rtl/mc/mc_telemetry.sv` for the layout). One snapshot takes
+3741 clocks, 174 us of the 1.27 ms vblank.
 
 ## Upstream tracking
 
