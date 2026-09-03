@@ -71,6 +71,17 @@ First telemetry build, `MC-NES_20260903b.rbf` (commit `ee6a0d4`, rtl/mc added):
 | Setup slack, tightest | 0.323 ns, HDMI PLL (TNS 0) |
 | Critical warnings | 0 |
 
+Replay build, `MC-NES_20260903g.rbf` (commit `f4a675a`, rtl/mc/mc_replay.sv, ddram
+read channel, joypad data owned by the replay while it runs; seed 2):
+
+| Item | Value |
+|---|---|
+| Wall time | 1688 s (28 min 8 s) |
+| Logic (ALMs) | 31,108 / 41,910 (74%) |
+| Setup slack, tightest | HDMI PLL, seed dependent: 0.305 / 0.007 / 0.186 ns across three seed-2 builds of near-identical logic (TNS 0) |
+| Critical warnings | 0 |
+| Verified | TASVideos 1715M (Super Mario Bros. "warps", 17868 frames) plays to the ending on the box; per-frame RAM matches FCEUX |
+
 Every later build is compared against these rows. A negative slack on any
 clock is a failed build. The tightest slack sits on the HDMI PLL and moves
 between builds whose difference is unrelated logic (0.468 to 0.323 ns here);
