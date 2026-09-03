@@ -15,7 +15,10 @@
 // Sequence: the app writes the entries, then the header with a new
 // generation and armed = 1, then reloads the ROM. This module polls the header
 // while idle; on a new generation it prefetches the first entries and waits
-// for the core's reset to release (the end of the ROM load: that is power-on).
+// for the core's reset to release after a ROM download (the end of the ROM
+// load: that is power-on). A reset release with no download before it (the
+// FPGA load itself; an MGL launch gives one of those about two seconds before
+// the ROM upload) is not the start and is ignored.
 // From then on entry N is presented at the rising edge of vblank of frame N
 // (docs/TAS-semantics.md: FCEUX sets the frame's input just before the frame's
 // vblank), entry 0 from the reset release itself. At `frames` it stops and
@@ -32,6 +35,7 @@ module mc_replay
 (
 	input             clk,
 	input             reset,       // the core's reset (high during a ROM load)
+	input             downloading, // a ROM upload is in progress (NES.sv `downloading`)
 	input             vblank,
 
 	// DDR read channel (64 bit word address inside the 0x30000000 window)
@@ -75,6 +79,7 @@ reg        pending = 0;   // a read was issued, waiting for ready
 reg        frame_pend = 0, release_pend = 0;
 wire       tick = frame_start | frame_pend;
 wire       release_now = reset_release | release_pend;
+reg        dl_seen = 0;   // a download happened since arming: the next release is power-on
 
 task automatic read_word(input [24:0] a, input st_t next);
 	ddr_addr <= a;
@@ -91,6 +96,7 @@ always @(posedge clk) begin
 	poll_cnt <= (poll_cnt == POLL_CLKS) ? 19'd0 : poll_cnt + 19'd1;
 	if (frame_start && st != RUN) frame_pend <= 1;
 	if (reset_release && st != WAIT_RESET) release_pend <= 1;
+	if (downloading) dl_seen <= 1;   // sticky; EVAL's assignment below wins on the arm clock
 
 	case (st)
 
@@ -112,7 +118,8 @@ always @(posedge clk) begin
 			index  <= 0;
 			if (hdr1[31:0] == 0) state <= S_BADHDR;
 			else begin
-				state <= S_ARMED;
+				state   <= S_ARMED;
+				dl_seen <= downloading;
 				read_word(HDR_W + 25'd8, PF0);
 			end
 		end
@@ -124,8 +131,8 @@ always @(posedge clk) begin
 	WAIT_RESET: begin
 		release_pend <= 0;
 		frame_pend   <= 0;
-		if (poll_cnt == 0 && !pending && !release_now) read_word(HDR_W + 25'd2, RD_FLAGS);   // abort?
-		if (release_now) begin
+		if (poll_cnt == 0 && !pending && !(release_now && dl_seen)) read_word(HDR_W + 25'd2, RD_FLAGS);   // abort?
+		if (release_now && dl_seen) begin
 			active <= 1;
 			state  <= S_RUN;
 			index  <= 0;

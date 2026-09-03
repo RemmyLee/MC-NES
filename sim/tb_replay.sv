@@ -7,7 +7,7 @@ module tb_replay;
 reg clk = 0;
 always #23.28 clk = ~clk;
 
-reg reset = 1, vblank = 0;
+reg reset = 1, vblank = 0, downloading = 0;
 integer errors = 0;
 
 // DDR model: 64 words from the replay header word
@@ -31,7 +31,7 @@ always @(posedge clk) begin
 end
 
 wire active; wire [7:0] p1, p2, state, gen; wire [31:0] index;
-mc_replay dut (.clk(clk), .reset(reset), .vblank(vblank), .ddr_addr(ddr_addr), .ddr_req(ddr_req), .ddr_dout(ddr_dout), .ddr_ready(ddr_ready),
+mc_replay dut (.clk(clk), .reset(reset), .downloading(downloading), .vblank(vblank), .ddr_addr(ddr_addr), .ddr_req(ddr_req), .ddr_dout(ddr_dout), .ddr_ready(ddr_ready),
 	.active(active), .p1(p1), .p2(p2), .index(index), .state(state), .gen(gen));
 
 task check(input string what, input longint got, input longint want);
@@ -54,6 +54,13 @@ task arm(input [31:0] frames, input [7:0] g);
 	mem[2] = 64'd1;
 endtask
 
+// a ROM load as NES.sv shows it: reset up, downloading pulses, reset releases
+task load;
+	reset <= 1; repeat (3) @(posedge clk);
+	downloading <= 1; repeat (5) @(posedge clk); downloading <= 0; repeat (3) @(posedge clk);
+	reset <= 0; repeat (3) @(posedge clk);
+endtask
+
 
 initial begin
 	// entries: frame i has p1 = i+1, p2 = 0x80+i
@@ -70,8 +77,13 @@ initial begin
 	arm(10, 8'd7); poll;
 	check("armed", state, 1); check("gen", gen, 7); check("still inactive", active, 0);
 
-	// reset releases: entry 0 presented at once
+	// the FPGA load's own reset release, no download before it: ignored
 	@(posedge clk); reset <= 0; repeat (3) @(posedge clk);
+	check("release without download ignored", state, 1); check("still inactive 2", active, 0);
+	frame; check("frames while armed do not advance", index, 0);
+
+	// the ROM load's reset release: entry 0 presented at once
+	load;
 	check("run", state, 2); check("active", active, 1); check("p1 e0", p1, 1); check("p2 e0", p2, 8'h80); check("index 0", index, 0);
 
 	// frames 1..9
@@ -94,18 +106,18 @@ initial begin
 	// unsupported command inside a movie: stops at that entry
 	mem[8][63:32] = {8'd0, 8'd1, 8'h81, 8'd2};   // entry 1 (high half of word 8) carries the reset command
 	mem[2] = 64'd1; arm(10, 8'd9); poll; check("armed again", state, 1);
-	reset <= 1; repeat (3) @(posedge clk); reset <= 0; repeat (3) @(posedge clk);
+	load;
 	check("run again", state, 2);
 	frame; check("unsupported cmd", state, 5); check("inactive after unsupported", active, 0);
 	mem[8][63:32] = {8'd0, 8'd0, 8'h81, 8'd2};
 
 	// a reset during a run aborts it
-	arm(10, 8'd10); poll; reset <= 1; repeat (3) @(posedge clk); reset <= 0; repeat (3) @(posedge clk);
+	arm(10, 8'd10); poll; load;
 	frame; check("running", state, 2);
 	reset <= 1; repeat (3) @(posedge clk); check("reset aborts", state, 4); reset <= 0;
 
 	// a frame edge that lands during a header poll is not lost
-	arm(10, 8'd11); poll; reset <= 1; repeat (3) @(posedge clk); reset <= 0; repeat (3) @(posedge clk);
+	arm(10, 8'd11); poll; load;
 	@(negedge clk) dut.poll_cnt = dut.POLL_CLKS - 1; @(posedge clk); @(posedge clk); @(posedge clk);   // poll read in flight
 	vblank <= 1; repeat (10) @(posedge clk); vblank <= 0; repeat (40) @(posedge clk);
 	check("edge kept during poll", index, 1);

@@ -1350,6 +1350,7 @@ mc_replay mc_replay
 (
 	.clk(clk),
 	.reset(reset_nes),
+	.downloading(downloading),
 	.vblank(nes_vblank),
 	.ddr_addr(mc_rd_addr),
 	.ddr_req(mc_rd_req),
