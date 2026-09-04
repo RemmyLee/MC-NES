@@ -7,7 +7,7 @@ module tb_replay;
 reg clk = 0;
 always #23.28 clk = ~clk;
 
-reg reset = 1, vblank = 0, downloading = 0;
+reg reset = 1, vblank = 0, downloading = 0, joy_read = 0;
 integer errors = 0;
 
 // DDR model: 64 words from the replay header word
@@ -31,7 +31,7 @@ always @(posedge clk) begin
 end
 
 wire active; wire [7:0] p1, p2, state, gen; wire [31:0] index;
-mc_replay dut (.clk(clk), .reset(reset), .downloading(downloading), .vblank(vblank), .ddr_addr(ddr_addr), .ddr_req(ddr_req), .ddr_dout(ddr_dout), .ddr_ready(ddr_ready),
+mc_replay dut (.clk(clk), .reset(reset), .downloading(downloading), .vblank(vblank), .joy_read(joy_read), .ddr_addr(ddr_addr), .ddr_req(ddr_req), .ddr_dout(ddr_dout), .ddr_ready(ddr_ready),
 	.active(active), .p1(p1), .p2(p2), .index(index), .state(state), .gen(gen));
 
 task check(input string what, input longint got, input longint want);
@@ -40,6 +40,11 @@ endtask
 
 task frame;   // one vblank edge
 	@(posedge clk); vblank <= 1; repeat (10) @(posedge clk); vblank <= 0; repeat (30) @(posedge clk);
+endtask
+
+task polled_frame;   // the game reads the pad, then the frame ends
+	@(posedge clk); joy_read <= 1; @(posedge clk); joy_read <= 0; repeat (3) @(posedge clk);
+	frame;
 endtask
 
 // let the poll timer fire: force it near the wrap
@@ -115,6 +120,19 @@ initial begin
 	arm(10, 8'd10); poll; load;
 	frame; check("running", state, 2);
 	reset <= 1; repeat (3) @(posedge clk); check("reset aborts", state, 4); reset <= 0;
+
+	// poll-indexed mode (w2 bit 2): a frame without a controller read holds the stream
+	arm(10, 8'd12); mem[2] = 64'd5; poll; check("poll mode armed", state, 1);
+	load;
+	check("poll run", state, 2); check("poll entry 0", p1, 1); check("poll index 0", index, 0);
+	frame; check("lag frame does not advance", index, 0); check("entry 0 held", p1, 1);
+	frame; check("second lag frame holds too", index, 0);
+	polled_frame; check("polled frame advances", index, 1); check("entry 1", p1, 2);
+	polled_frame; check("second polled frame", index, 2); check("entry 2", p1, 3);
+	frame; check("lag frame between polls holds", index, 2);
+	polled_frame; check("resumes on the next poll", index, 3);
+	reset <= 1; repeat (3) @(posedge clk); check("reset aborts poll run", state, 4); reset <= 0; repeat (3) @(posedge clk);
+	mem[2] = 64'd1;
 
 	// a frame edge that lands during a header poll is not lost
 	arm(10, 8'd11); poll; load;

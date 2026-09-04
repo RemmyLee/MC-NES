@@ -5,7 +5,7 @@
 // window), written by MiSTer Control:
 //   w0  magic "MC-RPLAY"
 //   w1  [31:0] frames            [63:32] generation (changes on every arm)
-//   w2  [0] armed  [1] abort     (the rest reserved)
+//   w2  [0] armed  [1] abort  [2] poll-indexed  (the rest reserved)
 //   w3  reserved
 //   w8.. entries, 2 per word: frame i is bytes 4*(i&1) .. +3 of word 8 + i/2:
 //        [7:0] pad 1  [15:8] pad 2  [23:16] command  [31:24] 0
@@ -21,7 +21,13 @@
 // the ROM upload) is not the start and is ignored.
 // From then on entry N is presented at the rising edge of vblank of frame N
 // (docs/TAS-semantics.md: FCEUX sets the frame's input just before the frame's
-// vblank), entry 0 from the reset release itself. At `frames` it stops and
+// vblank), entry 0 from the reset release itself.
+//
+// Poll-indexed mode (header w2 bit 2): the index advances at vblank only when
+// the game read the controller during the finished frame. The app then writes
+// the entries the emulator actually delivered (its lag frames stripped), so a
+// frame where the core lags differently from the emulator no longer shifts
+// every later input. This is how console verification rigs stay in sync. At `frames` it stops and
 // hands the pads back to the HPS. An entry with a command bit set stops the
 // replay with state UNSUPPORTED: reset and power inside a movie are not
 // implemented in this version.
@@ -37,6 +43,7 @@ module mc_replay
 	input             reset,       // the core's reset (high during a ROM load)
 	input             downloading, // a game upload is in progress (NES.sv `downloading` for a nes/fds/nsf type; boot0.rom is not a game)
 	input             vblank,
+	input             joy_read,    // one pulse per $4016/$4017 read (the lag rule's poll)
 
 	// DDR read channel (64 bit word address inside the 0x30000000 window)
 	output reg [24:0] ddr_addr,
@@ -80,6 +87,8 @@ reg        frame_pend = 0, release_pend = 0;
 wire       tick = frame_start | frame_pend;
 wire       release_now = reset_release | release_pend;
 reg        dl_seen = 0;   // a download happened since arming: the next release is power-on
+reg        poll_mode = 0; // header w2 bit 2: advance per polled frame, not per frame
+reg        polled = 0;    // the game read the controller since the last vblank
 
 task automatic read_word(input [24:0] a, input st_t next);
 	ddr_addr <= a;
@@ -97,6 +106,7 @@ always @(posedge clk) begin
 	if (frame_start && st != RUN) frame_pend <= 1;
 	if (reset_release && st != WAIT_RESET) release_pend <= 1;
 	if (downloading) dl_seen <= 1;   // sticky; EVAL's assignment below wins on the arm clock
+	if (joy_read) polled <= 1;
 
 	case (st)
 
@@ -118,8 +128,9 @@ always @(posedge clk) begin
 			index  <= 0;
 			if (hdr1[31:0] == 0) state <= S_BADHDR;
 			else begin
-				state   <= S_ARMED;
-				dl_seen <= downloading;
+				state     <= S_ARMED;
+				dl_seen   <= downloading;
+				poll_mode <= hdr2[2];
 				read_word(HDR_W + 25'd8, PF0);
 			end
 		end
@@ -136,6 +147,7 @@ always @(posedge clk) begin
 			active <= 1;
 			state  <= S_RUN;
 			index  <= 0;
+			polled <= 0;
 			p1     <= cur[7:0];
 			p2     <= cur[15:8];
 			st     <= RUN;
@@ -155,7 +167,11 @@ always @(posedge clk) begin
 			active <= 0; state <= S_ABORT; st <= IDLE;
 		end
 		else if (tick) begin
-			if (index + 32'd1 >= frames) begin
+			polled <= 0;
+			if (poll_mode && !polled) begin
+				// the game never read this frame's entry; hold the stream
+			end
+			else if (index + 32'd1 >= frames) begin
 				active <= 0; state <= S_DONE; st <= IDLE;
 			end
 			else begin
