@@ -455,6 +455,7 @@ wire [7:0] nes_joy_B = { joyB[0], joyB[1], joyB[2], joyB[3], joyB[7], joyB[6], j
 // MiSTer Control (rtl/mc): declared here, driven in the telemetry section below
 wire        mc_rp_active;
 wire  [7:0] mc_rp_p1, mc_rp_p2, mc_rp_state, mc_rp_gen;
+wire        mc_rp_armed = (mc_rp_state == 8'd1) || (mc_rp_state == 8'd2); // a TAS is armed/running: start from a clean cart, like FCEUX
 wire [31:0] mc_rp_index;
 wire  [7:0] mc_joy_port1, mc_joy_port2;
 wire        mc_reset;
@@ -693,7 +694,7 @@ wire [7:0] cleardata = mc_fceux_ram ? (loader_addr[2] ? 8'hFF : 8'h00) :
 GameLoader loader
 (
 	.clk              ( clk               ),
-	.clearval         ( |clearval | mc_fceux_ram ),
+	.clearval         ( |clearval | mc_fceux_ram | mc_rp_armed ),
 	.cleardata        ( cleardata         ),
 	.reset            ( loader_reset      ),
 	.downloading      ( downloading       ),
@@ -1195,8 +1196,8 @@ always @(posedge clk) begin
 	if(~bk_ena && loader_write_triggered) max_diskside <= loader_addr_mem[17:16];
 end
 
-wire bk_load    = status[6];
-wire bk_save    = status[7] | (bk_pending & OSD_STATUS && ~status[50]);
+wire bk_load    = status[6] & ~mc_rp_armed;
+wire bk_save    = (status[7] | (bk_pending & OSD_STATUS && ~status[50])) & ~mc_rp_armed;
 reg  bk_loading = 0;
 reg  bk_loading_req = 0;
 reg  bk_request = 0;
@@ -1233,7 +1234,7 @@ always @(posedge clk) begin : save_block
 			bk_loading <= bk_load;
 			bk_request <= 1;
 		end
-		if(old_downloading & ~downloading & |img_size & bk_ena) begin
+		if(old_downloading & ~downloading & |img_size & bk_ena & ~mc_rp_armed) begin
 			bk_loading <= 1;
 			bk_request <= 1;
 		end
